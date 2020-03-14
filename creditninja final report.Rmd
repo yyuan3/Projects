@@ -1,0 +1,306 @@
+---
+title: "Creditninja final report"
+author: "Ye"
+date: "3/1/2020"
+output:
+  rmdformats::material
+---
+
+
+
+# Loading files and Packages
+
+## R Packages Used
+```{r, message=FALSE,warning=FALSE}
+library(Hmisc)# Description of the data
+library(dplyr)
+library(tidyverse)
+library(tidytext)
+library(ggplot2)
+library(plyr)
+library(ggpubr)
+library(rpart) # Decision tree model
+library(rpart.plot) # Decision tree plots
+library(caret)
+```
+
+## Importing the dataset
+```{r}
+raw <- read.csv("raw_data.csv", header=TRUE, sep= ",", strip.white=TRUE,col.names= c("age", "workclass", "fnlwgt", "education", "educationnum", "maritalstatus", "occupation","relationship", "race", "sex", "capitalgain",
+ "capitalloss", "hoursperweek", "nativecountry",
+"income"), na.strings= "?", stringsAsFactors = TRUE)
+
+head(raw)
+```
+
+
+# Question 1  
+ 
+Which race, sex combination is most represented in this data set? Which race, sex combination is least likely to make more than $50K? 
+
+```{r}
+Q1_1 <- data.frame(ddply(raw,.(race,sex),nrow))
+
+Q1_1$race_sex_combine <- paste(Q1_1$race,Q1_1$sex)
+Q1_1 <- Q1_1%>%
+  mutate(num_rows = V1)%>%
+  select(race_sex_combine,num_rows)%>%
+  arrange(desc(num_rows))
+Q1_1
+```
+
+From the table, white male combination has the most rows, followed by white femail and black male.
+
+```{r}
+Q1_2 <- data.frame(ddply(raw,.(race,sex,income),nrow))
+
+Q1_2$race_sex_combine <- paste(Q1_2$race,Q1_2$sex)
+
+Q1_2 <- Q1_2%>%
+  mutate(num_rows = V1)%>%
+  select(race_sex_combine,income,num_rows)%>%
+  arrange(num_rows)
+Q1_2
+
+
+ggplot(Q1_2,aes(x=race_sex_combine, y =num_rows, fill = income))+
+  geom_bar(stat = 'identity')+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  ggtitle('Number of Race & Sex combination')+
+  xlab("Race & Sex")+
+  ylab("Number of People")
+
+```
+
+From the table and plot above, Other Female combination ranked first at least likely to make more than 50K followed by Amer-Indian-Eskimo. White Male are most likely to make more than 50K.
+
+## In conclusion
+White Male most represented in this data set, Other Female is least likely to make more than $50K.
+
+
+
+
+
+# Question 3
+ 
+What steps did you take to prepare the data for your analysis and why did you need to do those steps? What tools did you use to do this data preparation and the associated analyses?
+
+## Clean the Missing value
+
+I replaced the data with NA for the string “?”when I imported the dataset to make the treatment of missing values easier.
+
+```{r}
+table(complete.cases(raw))
+summary(raw[!complete.cases(raw),])
+summary(raw)
+```
+
+From the summary, 2399 datapoints are NA, which is 7.3% of the dataset.
+
+In income columns, we find that 2066 of 2399 NA are in < 50K. Because most of the dataset are < 50K(24720/32562), so removing this NA rows won't influence the result.
+
+```{r}
+clean <- na.omit(raw)
+```
+
+```{r}
+str(clean)
+```
+
+## Correlation plot
+```{r}
+#Changing income to 0, 1
+clean$income <- as.numeric(clean$income)-1
+#Correlation plot
+num.var <- c(1, 3, 5, 11:13, 15)
+
+corrplot::corrplot.mixed(cor(clean[,num.var]), lower = "number", upper = "square", order = "hclust")
+```
+
+I built a correlation plot to see whether there is any relationshi between the numeric and the income. First, I change the income to 0 and 1 to make it numeric. From the plot, we can see there is no variable strongly related with each other.
+
+```{r}
+#Re-factoring income
+clean$income <- factor(clean$income, labels=c("<=50k", ">50k"))
+levels(clean$income)
+```
+
+
+## In conclusion
+
+During the data preparation process, first, I replace the ? to NA for the convenience of cleaning data. Then, I count the row of number which contains NA and see whether the proportion of NA will influence data integrity.Finally, I removed all the NA because most of the rows including NA centres around <=50k category, which will not affect the results.
+
+
+For associated analysses, I built correlation plot to see the relationship between variables. I extract all the numeric variables and convert income results to numeric 0 and 1. It turns out that there is no obvious relationship between variables.
+
+
+# Question 2  
+ 
+Are there any columns that can be dropped from this data set without damaging the information contained within the data?
+
+## Captain gain VS Captain loss
+```{r}
+hist(clean$capitalgain, col="pink", main="Capitalgain")
+
+hist(clean$capitalloss, col="pink", main="Capitalloss")
+```
+
+```{r}
+# check whether who have both captial loss and gain
+sum(clean$capitalloss > 0 & clean$capitalgain > 0)
+
+```
+
+```{r}
+#Net Capital = Capitalgain - Capitalloss
+hist(clean$capitalgain-clean$capitalloss, col="pink", main="Net Capital")
+```
+
+From the plot above, there is no one who has both capitalgain and capitalloss, so I will drop off both columns and combine them to a new column "netapital", which is more convenient for building the model.
+
+```{r}
+clean$netcapital <- clean$capitalgain-clean$capitalloss
+```
+
+## Education vs Educationnum
+```{r}
+# levels of education
+levels(clean$education)
+```
+
+```{r}
+#reorder the education first
+clean$education <- factor(clean$education,levels(clean$education)[c(14, 4:7, 1:3, 12, 15, 8:9, 16, 10, 13, 11)])
+
+plot(clean$educationnum,clean$education,main="Education vs Educationnum")
+
+```
+
+From the plot, we can see Education and Educationnum have linear relationship, which two variable reveals the same information. So, I will drop Educationnum column.
+
+## Nativecountry
+```{r}
+
+nativedata <- data.frame(ddply(clean,.(nativecountry),nrow))
+nativedata%>%
+  arrange(desc(V1))
+plot(clean$nativecountry,col = 'pink', main="Plot1: Native country")
+ggplot(clean,aes(x = nativecountry, fill = income)) + geom_bar(position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ggtitle("Plot2: Native Country")
+```
+
+From the table and plot 1, we can see USA dominated in all the native country (27504/30162), but from plot 2 there is no clear relationship between income and the native country. So, I will also drop off the native country column.
+
+## In conclusion
+```{r}
+clean2 <- clean%>%
+  select(-educationnum,-capitalgain,-capitalloss,-nativecountry)
+```
+
+From the analysis above, I drop educationnum, capitalgain, capitalloss, nativecountry 4 columns which will not damage the information contained within the data. At the same time, I set up a new column Netcapital to combine capitalgain and capitalloss together for the convenience of building the model.
+
+# Question 4 
+ 
+The column “fnlwgt” is a continuous variable that has a complicated, interconnected definition. For this column is a higher value or a lower value more likely to predict high income?
+
+
+## logistic regression
+```{r}
+fniwgtdf <- clean2%>%
+  dplyr::select(fnlwgt,income)
+fniwgtfit <- glm(income~., family=binomial(link='logit'),data = fniwgtdf)
+summary(fniwgtfit)
+
+```
+
+From the summary, we can see AIC = 33852,which means Information lost is really huge. From the p-value = 0.12, this model is not significant, which we can assume that this model cannot be built.
+
+```{r}
+plot(fniwgtdf$fnlwgt,fniwgtdf$income,main="fnlwgt - income")
+
+# try to build curve in logistic regression model
+ggplot(fniwgtfit, aes(x=fnlwgt, y=income)) + geom_point() + 
+  stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE)
+
+```
+
+From the first plot, we can generally know from this data distribution that we cannot built logistic regression and the variable fnlwgt - income don't have clear relationship.
+Then I try to build sigmod curve in logistic regression, but the system warns me it doesn't work.
+
+## In conclusion
+In conclusion, fnlwgt don't have obvious relationship with income, so we cannot fnlwgt whether it is a higher value or a lower value more likely to predict high income.
+
+# Question 5
+ 
+If we could only have access to one of the columns (not the target column) and still needed to make an income prediction, which column would you choose and why? What if you could have access to 3 columns? 
+
+## Decision Tree
+```{r}
+tree <- rpart(income ~ .,
+              data = clean2,
+              method = "class")
+plotcp(tree)
+```
+
+To see which variable plays a more critical role to predict income, decision tree is the best way.
+
+From the cpplot, when tree size = 5,the relative error reaches to the lowest.
+
+```{r}
+# Tree plot
+rpart.plot(tree, main = "Basic Classification Tree Income")
+tree
+```
+
+```{r}
+imp <- varImp(tree)
+imp
+rownames(imp)[order(imp$Overall, decreasing=TRUE)]
+```
+
+
+From the treeplot ,we can see that only "Netcapital","Education", "Relationship" three variables are used in the Decision tree method.
+
+From the table, Netcapital is the top key predictors followed by education and relationship for predicting the income levels.
+
+## In conclusion
+
+Thus, if only select one column, I will choose either capital gain or capital loss, because there is nobody who has both. If select three columns, I will choose "Netcapital","Education", "Relationship".
+
+# Question 6 
+ 
+What level of education should you achieve if you want to have a better than 50% chance of making more than $50K (per this data set)? 
+
+```{r}
+educatipntree <- clean2%>%
+  dplyr::select(education,income)
+
+edutree <- rpart(income ~ .,
+              data = educatipntree,
+              method = "class")
+```
+
+```{r}
+edutree
+```
+
+To see which level of education will have better than 50% chance of making more than $50K, we can directly see the nodes of tree. First, I select education and Income to build a new dataframe and build a decision tree model for them. Then, I print out all the nodes to see the probability of each education level. From the text above, only education = Prof-school,Masters,Doctorate 2544  940 >50k (0.3694969 0.6305031) have better than 50% chance.
+
+```{r}
+ggplot(educatipntree, aes(x = education, fill = income)) + geom_bar(position="fill") + theme(axis.text.x = element_text(angle = 90)) + ggtitle("Education")
+```
+
+At the same time, I also plot a bar chart to see the relationship between education level and the income. We can know the bar of >50k in Prof-school, masters, doctorate higher than 0.5, which prove the previous findings.
+
+## In conclusion
+
+People who achieve Prof-school, masters, doctorate have a better than 50% chance of making more than $50K.
+
+
+
+
+
+
+
+
+
+
